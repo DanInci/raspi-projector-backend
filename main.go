@@ -30,7 +30,7 @@ func main() {
 		panic(err)
 	}
 
-	fb, err := framebuffer.Open("/dev/fb")
+	fb, err := framebuffer.Open("/dev/fb0")
 	if err != nil {
 		logger.Error("Failed to open framebuffer")
 		panic(err)
