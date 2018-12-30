@@ -1,42 +1,84 @@
 package main
 
 import (
-	logger "github.com/apsdehal/go-logger"
-	framebuffer "github.com/gonutz/framebuffer"
-	qrcode "github.com/skip2/go-qrcode"
-	"image"
-	"image/draw"
+	controller "github.com/DanInci/raspberry-projector/controller"
+	impress "github.com/DanInci/raspberry-projector/impress"
+	log "github.com/apsdehal/go-logger"
+	configure "github.com/paked/configure"
+	http "net/http"
+	// qrcode "github.com/skip2/go-qrcode"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
-func setupLogger() *logger.Logger {
-	log, err := logger.New("projector-service", 1, os.Stdout)
+var (
+	conf                = configure.New()
+	logger              = setupLogger()
+	libreOfficePath     = conf.String("libre-office-path", "soffice", "Path for LibreOffice")
+	libreRemoteName     = conf.String("libre-remote-name", "WebServer", "The name for the remote")
+	libreRemotePIN      = conf.String("libre-remote-pin", "13579", "The PIN for the remote connection")
+	libreMaxConnections = conf.Int("libre-max-connections", 10, "The maximum number of slideshow controllers allowed")
+	libreMaxTimeout     = conf.Int("libre-max-timeout", 30, "The number of seconds the slideshow owner is allowed to be disconnected before drop")
+	httpAddr            = conf.String("http-addr", ":8080", "Address for http server")
+)
+
+func init() {
+	impress.Logger = logger
+	controller.Logger = logger
+}
+
+func setupConfigs() {
+	conf.Use(configure.NewEnvironment())
+	conf.Use(configure.NewFlag())
+}
+
+func setupLogger() *log.Logger {
+	log, err := log.New("projector-service", 1, os.Stdout)
 	if err != nil {
 		panic(err)
 	}
-	log.SetFormat("[%{time}] {%message}")
+	log.SetFormat("[%{time}] %{message}")
 	return log
 }
 
+func setupHTTPServer() *http.Server {
+	httpServer := &http.Server{Addr: *httpAddr}
+
+	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+		controller.GetStats(w, r)
+	})
+
+	http.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		controller.UploadPPT(w, r, *libreRemoteName, *libreRemotePIN, *libreMaxConnections, *libreMaxTimeout)
+	})
+
+	http.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
+		controller.ServeImpressController(w, r)
+	})
+
+	return httpServer
+}
+
 func main() {
-	var qrCode *qrcode.QRCode
-	var logger *logger.Logger
+	logger.InfoF("Process started with PID %d", os.Getpid())
 
-	logger = setupLogger()
+	setupConfigs()
+	conf.Parse()
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 
-	qrCode, err := qrcode.New("WIFI:T:WPA;S:Dani's Raspberry;P:123456987asd;;", qrcode.Highest)
-	if err != nil {
-		logger.Error("Failed to generate QR code")
-		panic(err)
-	}
+	httpServer := setupHTTPServer()
+	logger.InfoF("Starting http server on localhost%s...", httpServer.Addr)
+	go func() {
+		err := httpServer.ListenAndServe()
+		if err != nil {
+			logger.CriticalF("Error starting http server: %v", err)
+			logger.Fatal("Shutting down...")
+		}
+	}()
 
-	fb, err := framebuffer.Open("/dev/fb0")
-	if err != nil {
-		logger.Error("Failed to open framebuffer")
-		panic(err)
-	}
-	defer fb.Close()
-
-	qrImg := qrCode.Image(256)
-	draw.Draw(fb, fb.Bounds(), qrImg, image.ZP, draw.Src)
+	<-c
+	logger.Notice("Received shutdown signal")
+	httpServer.Shutdown(nil)
 }

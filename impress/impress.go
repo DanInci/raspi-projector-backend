@@ -1,0 +1,330 @@
+package impress
+
+import (
+	bufio "bufio"
+	errors "errors"
+	log "github.com/apsdehal/go-logger"
+	net "net"
+	url "net/url"
+	strings "strings"
+	sync "sync"
+	time "time"
+)
+
+var Logger *log.Logger
+
+const (
+	PAIRED     = "LO_SERVER_SERVER_PAIRED"
+	VALIDATING = "LO_SERVER_VALIDATING_PIN"
+
+	SLIDE_SHOW_INFO       = "slideshow_info"
+	SLIDE_SHOW_STARTED    = "slideshow_started"
+	SLIDE_SHOW_FINISHED   = "slideshow_finished"
+	SLIDE_SHOW_TERMINATED = "slideshow_terminated"
+	SLIDE_UPDATED         = "slide_updated"
+	SLIDE_PREVIEW         = "slide_preview"
+	SLIDE_NOTES           = "slide_notes"
+)
+
+type ImpressStats struct {
+	Name           string
+	Status         []string
+	Controllers    int
+	IsOwnerPresent bool
+}
+
+type ImpressClient struct {
+	conn           net.Conn
+	clientUUID     string
+	stats          ImpressStats
+	controllers    []*ImpressController
+	maxControllers int
+	ownerTimeout   int
+	isTerminated   bool
+	shutdown       chan bool
+	requests       chan []string
+	messages       chan []string
+	register       chan *ImpressController
+	unregister     chan *ImpressController
+	ticker         *time.Ticker
+	mu             sync.Mutex
+}
+
+func NewClient(uuid string, maxControllers int, ownerTimeout int) *ImpressClient {
+	client := &ImpressClient{
+		conn:           nil,
+		clientUUID:     uuid,
+		stats:          ImpressStats{Name: "", Controllers: 0, IsOwnerPresent: false, Status: make([]string, 0)},
+		controllers:    make([]*ImpressController, 0),
+		maxControllers: maxControllers,
+		ownerTimeout:   ownerTimeout,
+		isTerminated:   false,
+		shutdown:       make(chan bool),
+		requests:       make(chan []string),
+		messages:       make(chan []string),
+		register:       make(chan *ImpressController),
+		unregister:     make(chan *ImpressController),
+		ticker:         nil,
+		mu:             sync.Mutex{},
+	}
+	go client.handleRegistrations()
+	return client
+}
+
+func (impr *ImpressClient) OpenConnection(remoteName string, remotePIN string) error {
+	u, err := url.Parse("ws://localhost:1599")
+	if err != nil {
+		return err
+	}
+
+	rawConn, err := net.Dial("tcp", u.Host)
+	if err != nil {
+		return err
+	}
+
+	err1 := sendRequest([]string{PAIR_WITH_SERVER, remoteName, remotePIN}, rawConn)
+	if err1 != nil {
+		rawConn.Close()
+		return err1
+	}
+
+	messages, err2 := readMessage(rawConn)
+	if err2 != nil {
+		rawConn.Close()
+		return err2
+	}
+	if messages[0] == VALIDATING {
+		rawConn.Close()
+		return errors.New("Remote server not authorised")
+	} else if messages[0] != PAIRED {
+		rawConn.Close()
+		return errors.New("Failed connection handshake")
+	}
+
+	impr.conn = rawConn
+	return nil
+}
+
+func (impr *ImpressClient) GetClientUUID() string {
+	impr.mu.Lock()
+	defer impr.mu.Unlock()
+
+	return impr.clientUUID
+}
+
+func (impr *ImpressClient) GetStats() ImpressStats {
+	impr.mu.Lock()
+	defer impr.mu.Unlock()
+
+	return impr.stats
+}
+
+func (impr *ImpressClient) IsTerminated() bool {
+	impr.mu.Lock()
+	defer impr.mu.Unlock()
+
+	return impr.isTerminated
+}
+
+func (impr *ImpressClient) HasControllerSpace() bool {
+	impr.mu.Lock()
+	defer impr.mu.Unlock()
+
+	return impr.stats.Controllers < impr.maxControllers
+}
+
+func (impr *ImpressClient) CloseConnection() {
+	impr.conn.Close()
+	impr.conn = nil
+}
+
+func (impr *ImpressClient) ListenAndServe() {
+	go impr.listenForMessages()
+	go impr.serveRequests()
+	Logger.Info("Impress client started listening & serving")
+
+	stats := impr.GetStats()
+	if !stats.IsOwnerPresent {
+		impr.mu.Lock()
+
+		Logger.InfoF("Waiting %d seconds for owner to join...", impr.ownerTimeout)
+		impr.ticker = impr.waitForOwner(time.Duration(impr.ownerTimeout) * time.Second)
+
+		impr.mu.Unlock()
+	}
+}
+
+func (impr *ImpressClient) Terminate() {
+	impr.mu.Lock()
+	defer impr.mu.Unlock()
+
+	Logger.Info("Received terminate signal. Impress client is shutting down")
+	if impr.ticker != nil {
+		impr.ticker.Stop()
+	}
+	for _, controller := range impr.controllers {
+		controller.send <- []string{SLIDE_SHOW_TERMINATED}
+		close(controller.send)
+	}
+	close(impr.shutdown)
+	impr.CloseConnection()
+
+	impr.isTerminated = true
+}
+
+func (impr *ImpressClient) handleRegistrations() {
+	for {
+		select {
+		case controller := <-impr.register:
+			impr.mu.Lock()
+
+			if impr.stats.Controllers < impr.maxControllers {
+				impr.controllers = append(impr.controllers, controller)
+				if controller.IsOwner() {
+					impr.ticker.Stop()
+					impr.stats.IsOwnerPresent = true
+				}
+				impr.stats.Controllers++
+			} else {
+				Logger.Info("The maximum number of controllers was reached")
+			}
+			controller.send <- impr.stats.Status
+
+			impr.mu.Unlock()
+		case controller := <-impr.unregister:
+			for i, contr := range impr.controllers {
+				if contr == controller {
+					impr.mu.Lock()
+
+					impr.controllers = append(impr.controllers[:i], impr.controllers[i+1:]...)
+					if contr.IsOwner() {
+						Logger.InfoF("Slideshow owner has left. Waiting %d seconds for him to come back...", impr.ownerTimeout)
+						impr.ticker = impr.waitForOwner(time.Duration(impr.ownerTimeout) * time.Second)
+						impr.stats.IsOwnerPresent = false
+					}
+					impr.stats.Controllers--
+
+					impr.mu.Unlock()
+					close(contr.send)
+					break
+				}
+			}
+		case <-impr.shutdown:
+			return
+		}
+	}
+}
+
+func (impr *ImpressClient) waitForOwner(duration time.Duration) *time.Ticker {
+	ticker := time.NewTicker(duration)
+	go func() {
+		select {
+		case _, ok := <-ticker.C:
+			if ok {
+				impr.Terminate()
+			}
+		}
+	}()
+	return ticker
+}
+
+func (impr *ImpressClient) listenForMessages() {
+	for {
+		message, err := readMessage(impr.conn)
+		if err != nil {
+			Logger.ErrorF("Error reading Impress message: %v", err)
+			Logger.Critical("Impress client stopped listening for messages")
+			break
+		}
+		if ok := checkValidMessage(message); ok {
+			impr.messages <- message
+		}
+	}
+}
+
+func checkValidMessage(message []string) bool {
+	switch message[0] {
+	case PAIRED, VALIDATING, SLIDE_SHOW_INFO, SLIDE_SHOW_FINISHED, SLIDE_SHOW_STARTED, SLIDE_UPDATED:
+		return true
+	default:
+		return false
+	}
+}
+
+func (impr *ImpressClient) serveRequests() {
+	for {
+		select {
+		case message := <-impr.messages:
+			for _, controller := range impr.controllers {
+				select {
+				case controller.send <- message:
+				}
+			}
+			switch message[0] {
+			case SLIDE_SHOW_INFO:
+				impr.stats.Name = message[1]
+			case SLIDE_SHOW_FINISHED, SLIDE_SHOW_STARTED, SLIDE_UPDATED:
+				impr.updateStatus(message)
+			}
+		case request := <-impr.requests:
+			if request[0] == PRESENTATION_TERMINATE {
+				impr.Terminate()
+				break
+			}
+			err := sendRequest(request, impr.conn)
+			if err != nil {
+				Logger.ErrorF("Error writing Impress request: %v", err)
+				Logger.Critical("Impress client stopped serving controller requests")
+				break
+			}
+		case <-impr.shutdown:
+			return
+		}
+	}
+}
+
+func (impr *ImpressClient) updateStatus(messages []string) {
+	impr.mu.Lock()
+	defer impr.mu.Unlock()
+
+	switch messages[0] {
+	case SLIDE_SHOW_FINISHED:
+		impr.stats.Status = []string{SLIDE_SHOW_FINISHED}
+	case SLIDE_SHOW_STARTED:
+		impr.stats.Status = []string{SLIDE_SHOW_STARTED, messages[1], messages[2]}
+	case SLIDE_UPDATED:
+		if impr.stats.Status != nil && impr.stats.Status[0] == SLIDE_SHOW_STARTED {
+			impr.stats.Status[2] = messages[1]
+		}
+	}
+}
+
+func readMessage(conn net.Conn) ([]string, error) {
+	reader := bufio.NewReader(conn)
+	messages := make([]string, 0)
+	for {
+		bytes, _, err := reader.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+
+		message := string(bytes)
+		if message == "" {
+			break
+		}
+
+		messages = append(messages, message)
+	}
+	return messages, nil
+}
+
+func sendRequest(messages []string, conn net.Conn) error {
+	writer := bufio.NewWriter(conn)
+	formattedMessage := strings.Join(messages, "\n") + "\n\n"
+	_, err := writer.WriteString(formattedMessage)
+	if err != nil {
+		return err
+	}
+	writer.Flush()
+	return nil
+}
