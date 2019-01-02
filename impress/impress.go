@@ -9,6 +9,7 @@ import (
 	os "os"
 	exec "os/exec"
 	filepath "path/filepath"
+	runtime "runtime"
 	strings "strings"
 	sync "sync"
 	syscall "syscall"
@@ -182,8 +183,14 @@ func (impr *ImpressClient) CloseConnection() {
 
 func (impr *ImpressClient) StopPresentation() {
 	if impr.presentation != nil {
-		if err := impr.presentation.command.Process.Signal(syscall.SIGTERM); err != nil {
-			Logger.ErrorF("Error stopping presenation: %v", err)
+		if runtime.GOOS == "windows" {
+			if err := exec.Command("taskkill", "/F", "/T", "/PID", string(impr.presentation.command.Process.Pid)).Run(); err != nil {
+				Logger.ErrorF("Error stopping presenation: %v", err)
+			}
+		} else {
+			if err := impr.presentation.command.Process.Signal(syscall.SIGTERM); err != nil {
+				Logger.ErrorF("Error stopping presenation: %v", err)
+			}
 		}
 		if err := os.RemoveAll(filepath.Dir(impr.presentation.filePath)); err != nil {
 			Logger.ErrorF("Failed to remove file: %v", err)
