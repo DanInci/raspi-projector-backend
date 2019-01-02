@@ -11,6 +11,7 @@ import (
 	filepath "path/filepath"
 	strings "strings"
 	sync "sync"
+	syscall "syscall"
 	time "time"
 )
 
@@ -152,6 +153,7 @@ func (impr *ImpressClient) OpenConnection() error {
 		return err1
 	}
 
+	// time.Sleep(10 * time.Second)
 	messages, err2 := readMessage(rawConn)
 	if err2 != nil {
 		rawConn.Close()
@@ -180,7 +182,7 @@ func (impr *ImpressClient) CloseConnection() {
 
 func (impr *ImpressClient) StopPresentation() {
 	if impr.presentation != nil {
-		if err := impr.presentation.command.Process.Kill(); err != nil {
+		if err := impr.presentation.command.Process.Signal(syscall.SIGTERM); err != nil {
 			Logger.ErrorF("Error stopping presenation: %v", err)
 		}
 		if err := os.RemoveAll(filepath.Dir(impr.presentation.filePath)); err != nil {
