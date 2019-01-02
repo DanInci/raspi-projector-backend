@@ -6,12 +6,17 @@ import (
 	log "github.com/apsdehal/go-logger"
 	net "net"
 	url "net/url"
+	os "os"
+	exec "os/exec"
+	filepath "path/filepath"
 	strings "strings"
 	sync "sync"
 	time "time"
 )
 
 var Logger *log.Logger
+
+var currentConfig *configuration = &DefaultConfig
 
 const (
 	PAIRED     = "LO_SERVER_SERVER_PAIRED"
@@ -26,6 +31,14 @@ const (
 	SLIDE_NOTES           = "slide_notes"
 )
 
+var DefaultConfig = configuration{
+	libreOfficePath: "soffice",
+	remoteName:      "Remote",
+	remotePIN:       "12345",
+	maxControllers:  10,
+	ownerTimeout:    60,
+}
+
 type ImpressStats struct {
 	Name           string
 	Status         []string
@@ -34,55 +47,106 @@ type ImpressStats struct {
 }
 
 type ImpressClient struct {
-	conn           net.Conn
-	clientUUID     string
-	stats          ImpressStats
-	controllers    []*ImpressController
-	maxControllers int
-	ownerTimeout   int
-	isTerminated   bool
-	shutdown       chan bool
-	requests       chan []string
-	messages       chan []string
-	register       chan *ImpressController
-	unregister     chan *ImpressController
-	ticker         *time.Ticker
-	mu             sync.Mutex
+	conn         net.Conn
+	configs      configuration
+	presentation *presentation
+	stats        ImpressStats
+	controllers  []*ImpressController
+	isTerminated bool
+	shutdown     chan bool
+	requests     chan []string
+	messages     chan []string
+	register     chan *ImpressController
+	unregister   chan *ImpressController
+	ticker       *time.Ticker
+	mu           sync.Mutex
 }
 
-func NewClient(uuid string, maxControllers int, ownerTimeout int) *ImpressClient {
+type configuration struct {
+	libreOfficePath string
+	remoteURL       string
+	remoteName      string
+	remotePIN       string
+	maxControllers  int
+	ownerTimeout    int
+}
+
+type presentation struct {
+	uuid     string
+	filePath string
+	command  *exec.Cmd
+}
+
+func Configure(librePath string, remoteURL string, remoteName string, remotePIN string, maxControllers int, ownerTimeout int) {
+	currentConfig = &configuration{
+		libreOfficePath: librePath,
+		remoteURL:       remoteURL,
+		remoteName:      remoteName,
+		remotePIN:       remotePIN,
+		maxControllers:  maxControllers,
+		ownerTimeout:    ownerTimeout,
+	}
+}
+
+func NewClient() *ImpressClient {
 	client := &ImpressClient{
-		conn:           nil,
-		clientUUID:     uuid,
-		stats:          ImpressStats{Name: "", Controllers: 0, IsOwnerPresent: false, Status: make([]string, 0)},
-		controllers:    make([]*ImpressController, 0),
-		maxControllers: maxControllers,
-		ownerTimeout:   ownerTimeout,
-		isTerminated:   false,
-		shutdown:       make(chan bool),
-		requests:       make(chan []string),
-		messages:       make(chan []string),
-		register:       make(chan *ImpressController),
-		unregister:     make(chan *ImpressController),
-		ticker:         nil,
-		mu:             sync.Mutex{},
+		conn:         nil,
+		configs:      *currentConfig,
+		presentation: nil,
+		stats:        ImpressStats{Name: "", Controllers: 0, IsOwnerPresent: false, Status: make([]string, 0)},
+		controllers:  make([]*ImpressController, 0),
+		isTerminated: false,
+		shutdown:     make(chan bool),
+		requests:     make(chan []string),
+		messages:     make(chan []string),
+		register:     make(chan *ImpressController),
+		unregister:   make(chan *ImpressController),
+		ticker:       nil,
+		mu:           sync.Mutex{},
 	}
 	go client.handleRegistrations()
 	return client
 }
 
-func (impr *ImpressClient) OpenConnection(remoteName string, remotePIN string) error {
-	u, err := url.Parse("ws://localhost:1599")
+func (impr *ImpressClient) StartPresentation(uuid string, path string) error {
+	cmd := exec.Command(impr.configs.libreOfficePath, "--invisible", "--norestore", "--show", path)
+
+	if err := cmd.Start(); err != nil {
+		return err
+	} else {
+		impr.presentation = &presentation{
+			uuid:     uuid,
+			filePath: path,
+			command:  cmd,
+		}
+		return nil
+	}
+}
+
+func (impr *ImpressClient) OpenConnection() error {
+	u, err := url.Parse(impr.configs.remoteURL)
 	if err != nil {
 		return err
 	}
 
 	rawConn, err := net.Dial("tcp", u.Host)
+	i := 1
+	ticker := time.NewTicker(3 * time.Second)
+	for err != nil && i < 5 {
+		Logger.ErrorF("Attempt no %d to connect to impress failed. Retrying...", i)
+		select {
+		case <-ticker.C:
+			rawConn, err = net.Dial("tcp", u.Host)
+		}
+		i++
+	}
+	ticker.Stop()
 	if err != nil {
 		return err
 	}
 
-	err1 := sendRequest([]string{PAIR_WITH_SERVER, remoteName, remotePIN}, rawConn)
+	time.Sleep(5 * time.Second)
+	err1 := sendRequest([]string{PAIR_WITH_SERVER, impr.configs.remoteName, impr.configs.remotePIN}, rawConn)
 	if err1 != nil {
 		rawConn.Close()
 		return err1
@@ -105,11 +169,47 @@ func (impr *ImpressClient) OpenConnection(remoteName string, remotePIN string) e
 	return nil
 }
 
-func (impr *ImpressClient) GetClientUUID() string {
+func (impr *ImpressClient) CloseConnection() {
+	if impr.conn != nil {
+		if err := impr.conn.Close(); err != nil {
+			Logger.ErrorF("Error closing remote connection: %v", err)
+		}
+		impr.conn = nil
+	}
+}
+
+func (impr *ImpressClient) StopPresentation() {
+	if impr.presentation != nil {
+		if err := impr.presentation.command.Process.Kill(); err != nil {
+			Logger.ErrorF("Error stopping presenation: %v", err)
+		}
+		if err := os.RemoveAll(filepath.Dir(impr.presentation.filePath)); err != nil {
+			Logger.ErrorF("Failed to remove file: %v", err)
+		}
+		impr.presentation = nil
+	}
+}
+
+func (impr *ImpressClient) GetPresentationUUID() string {
 	impr.mu.Lock()
 	defer impr.mu.Unlock()
 
-	return impr.clientUUID
+	if impr.presentation != nil {
+		return impr.presentation.uuid
+	} else {
+		return ""
+	}
+}
+
+func (impr *ImpressClient) GetPresentationPath() string {
+	impr.mu.Lock()
+	defer impr.mu.Unlock()
+
+	if impr.presentation != nil {
+		return impr.presentation.filePath
+	} else {
+		return ""
+	}
 }
 
 func (impr *ImpressClient) GetStats() ImpressStats {
@@ -130,12 +230,7 @@ func (impr *ImpressClient) HasControllerSpace() bool {
 	impr.mu.Lock()
 	defer impr.mu.Unlock()
 
-	return impr.stats.Controllers < impr.maxControllers
-}
-
-func (impr *ImpressClient) CloseConnection() {
-	impr.conn.Close()
-	impr.conn = nil
+	return impr.stats.Controllers < impr.configs.maxControllers
 }
 
 func (impr *ImpressClient) ListenAndServe() {
@@ -147,8 +242,8 @@ func (impr *ImpressClient) ListenAndServe() {
 	if !stats.IsOwnerPresent {
 		impr.mu.Lock()
 
-		Logger.InfoF("Waiting %d seconds for owner to join...", impr.ownerTimeout)
-		impr.ticker = impr.waitForOwner(time.Duration(impr.ownerTimeout) * time.Second)
+		Logger.InfoF("Waiting %d seconds for owner to join...", impr.configs.ownerTimeout)
+		impr.ticker = impr.waitForOwner(time.Duration(impr.configs.ownerTimeout) * time.Second)
 
 		impr.mu.Unlock()
 	}
@@ -168,6 +263,7 @@ func (impr *ImpressClient) Terminate() {
 	}
 	close(impr.shutdown)
 	impr.CloseConnection()
+	impr.StopPresentation()
 
 	impr.isTerminated = true
 }
@@ -178,7 +274,7 @@ func (impr *ImpressClient) handleRegistrations() {
 		case controller := <-impr.register:
 			impr.mu.Lock()
 
-			if impr.stats.Controllers < impr.maxControllers {
+			if impr.stats.Controllers < impr.configs.maxControllers {
 				impr.controllers = append(impr.controllers, controller)
 				if controller.IsOwner() {
 					impr.ticker.Stop()
@@ -198,8 +294,8 @@ func (impr *ImpressClient) handleRegistrations() {
 
 					impr.controllers = append(impr.controllers[:i], impr.controllers[i+1:]...)
 					if contr.IsOwner() {
-						Logger.InfoF("Slideshow owner has left. Waiting %d seconds for him to come back...", impr.ownerTimeout)
-						impr.ticker = impr.waitForOwner(time.Duration(impr.ownerTimeout) * time.Second)
+						Logger.InfoF("Slideshow owner has left. Waiting %d seconds for him to come back...", impr.configs.ownerTimeout)
+						impr.ticker = impr.waitForOwner(time.Duration(impr.configs.ownerTimeout) * time.Second)
 						impr.stats.IsOwnerPresent = false
 					}
 					impr.stats.Controllers--

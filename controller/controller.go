@@ -5,7 +5,11 @@ import (
 	impress "github.com/DanInci/raspberry-projector/impress"
 	log "github.com/apsdehal/go-logger"
 	websocket "github.com/gorilla/websocket"
+	ioutil "io/ioutil"
 	http "net/http"
+	os "os"
+	filepath "path/filepath"
+	strings "strings"
 	sync "sync"
 )
 
@@ -36,45 +40,93 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func UploadPPT(w http.ResponseWriter, r *http.Request, remoteName string, remotePIN string, maxControllers int, ownerTimeout int) {
-	w.Header().Set("Content-Type", "application/json")
-	if !isSlideShowRunning() {
-		uuid := generateUUID()
-
-		client := impress.NewClient(uuid, maxControllers, ownerTimeout)
-		err1 := client.OpenConnection(remoteName, remotePIN)
-		if err1 != nil {
-			Logger.CriticalF("Failed to connect to impress: %s", err1)
-			w.WriteHeader(http.StatusInternalServerError)
-			writeError(w, "Slideshow failed to start")
-		}
-		client.ListenAndServe()
-		setImpressClient(client)
-
-		toEncode := make(map[string]interface{})
-		toEncode["ownerUUID"] = uuid
-		encoded, _ := json.Marshal(toEncode)
-		w.WriteHeader(http.StatusCreated)
-		w.Write(encoded)
-	} else {
-		w.WriteHeader(http.StatusBadRequest)
-		writeError(w, "Slideshow already running")
+func UploadPPT(w http.ResponseWriter, r *http.Request, filesDirectory string, maxUploadSize int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
+		writeError(w, "File is too big", http.StatusBadRequest)
+		return
 	}
+
+	fileName := r.PostFormValue("fileName")
+	if fileName == "" {
+		writeError(w, "'fileName' field not found", http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("uploadFile")
+	if err != nil {
+		writeError(w, "'uploadFile' field not found", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	fileBytes, err := ioutil.ReadAll(file)
+	if err != nil {
+		writeError(w, "Invalid file", http.StatusBadRequest)
+		return
+	}
+	fileType := http.DetectContentType(fileBytes)
+	if fileType != "application/octet-stream" || !(strings.HasSuffix(fileName, ".ppt") || strings.HasSuffix(fileName, ".pptx")) {
+		writeError(w, "Invalid file type", http.StatusBadRequest)
+		return
+	}
+
+	if isSlideShowRunning() {
+		writeError(w, "Slideshow already running", http.StatusBadRequest)
+		return
+	}
+
+	uploadFolderPath := filepath.Join(filepath.Dir(os.Args[0]), filesDirectory)
+	os.MkdirAll(uploadFolderPath, os.ModePerm)
+	filePath := filepath.Join(uploadFolderPath, fileName)
+
+	newFile, err := os.Create(filePath)
+	if err != nil {
+		Logger.ErrorF("Failed to upload file: %v", err)
+		writeError(w, "Failed to write file", http.StatusInternalServerError)
+		return
+	}
+	defer newFile.Close()
+	if _, err := newFile.Write(fileBytes); err != nil {
+		Logger.ErrorF("Failed to upload file: %v", err)
+		writeError(w, "Failed to write file", http.StatusInternalServerError)
+		return
+	}
+	Logger.InfoF("Uploaded file: %s\n", filePath)
+
+	uuid := generateUUID()
+	client := impress.NewClient()
+	if err := client.StartPresentation(uuid, filePath); err != nil {
+		Logger.ErrorF("Failed to start impress presentation: %v", err)
+		client.Terminate()
+		writeError(w, "Slideshow failed to start", http.StatusInternalServerError)
+		return
+	}
+	if err := client.OpenConnection(); err != nil {
+		Logger.ErrorF("Failed to open impress remote connection: %v", err)
+		client.Terminate()
+		writeError(w, "Slideshow failed to start", http.StatusInternalServerError)
+		return
+	}
+	client.ListenAndServe()
+	setImpressClient(client)
+
+	toEncode := make(map[string]interface{})
+	toEncode["ownerUUID"] = uuid
+	encoded, _ := json.Marshal(toEncode)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write(encoded)
 
 }
 
 func ServeImpressController(w http.ResponseWriter, r *http.Request) {
 	if !isSlideShowRunning() {
-		w.WriteHeader(http.StatusBadRequest)
-		writeError(w, "Slideshow not running")
+		writeError(w, "Slideshow not running", http.StatusBadRequest)
 		return
 	}
 
 	client := getImpressClient()
-	hasControllerSpace := client.HasControllerSpace()
-	if !hasControllerSpace {
-		w.WriteHeader(http.StatusBadRequest)
-		writeError(w, "Slideshow has reached the maximum number of controllers")
+	if !client.HasControllerSpace() {
+		writeError(w, "Slideshow has reached the maximum number of controllers", http.StatusBadRequest)
 		return
 	}
 
@@ -92,10 +144,12 @@ func ServeImpressController(w http.ResponseWriter, r *http.Request) {
 	controller.StartPumping(client)
 }
 
-func writeError(w http.ResponseWriter, message string) {
+func writeError(w http.ResponseWriter, message string, status int) {
 	toEncode := make(map[string]interface{})
 	toEncode["error"] = message
 	encoded, _ := json.Marshal(toEncode)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	w.Write(encoded)
 }
 

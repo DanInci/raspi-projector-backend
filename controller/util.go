@@ -6,7 +6,7 @@ import (
 
 func isSlideShowOwnerUUID(uuid string) bool {
 	if isSlideShowRunning() {
-		return getImpressClient().GetClientUUID() == uuid
+		return getImpressClient().GetPresentationUUID() == uuid
 	}
 	return false
 }

@@ -15,11 +15,14 @@ import (
 var (
 	conf                = configure.New()
 	logger              = setupLogger()
-	libreOfficePath     = conf.String("libre-office-path", "soffice", "Path for LibreOffice")
+	libreOfficePath     = conf.String("libre-office-path", "/Applications/LibreOffice.app/Contents/MacOS/soffice", "Path for LibreOffice")
+	libreRemoteURL      = conf.String("libre-remote-url", "ws://localhost:1599", "The default URL for libre remote connection")
 	libreRemoteName     = conf.String("libre-remote-name", "WebServer", "The name for the remote")
 	libreRemotePIN      = conf.String("libre-remote-pin", "13579", "The PIN for the remote connection")
-	libreMaxConnections = conf.Int("libre-max-connections", 10, "The maximum number of slideshow controllers allowed")
+	libreMaxControllers = conf.Int("libre-max-controllers", 10, "The maximum number of slideshow controllers allowed")
 	libreMaxTimeout     = conf.Int("libre-max-timeout", 30, "The number of seconds the slideshow owner is allowed to be disconnected before drop")
+	maxUploadSize       = conf.Int("max-upload-size", 1024*1024*10, "The maximum upload size for files")
+	filesDirectory      = conf.String("files-directory", "uploads", "The directory where the uploaded files would be saved")
 	httpAddr            = conf.String("http-addr", ":8080", "Address for http server")
 )
 
@@ -50,7 +53,7 @@ func setupHTTPServer() *http.Server {
 	})
 
 	http.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
-		controller.UploadPPT(w, r, *libreRemoteName, *libreRemotePIN, *libreMaxConnections, *libreMaxTimeout)
+		controller.UploadPPT(w, r, *filesDirectory, int64(*maxUploadSize))
 	})
 
 	http.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +61,10 @@ func setupHTTPServer() *http.Server {
 	})
 
 	return httpServer
+}
+
+func setupImpress() {
+	impress.Configure(*libreOfficePath, *libreRemoteURL, *libreRemoteName, *libreRemotePIN, *libreMaxControllers, *libreMaxTimeout)
 }
 
 func main() {
@@ -68,6 +75,7 @@ func main() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 
+	setupImpress()
 	httpServer := setupHTTPServer()
 	logger.InfoF("Starting http server on localhost%s...", httpServer.Addr)
 	go func() {
