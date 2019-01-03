@@ -169,22 +169,26 @@ func (controller *ImpressController) writePump() {
 
 func encodeResponse(message []string) ([]byte, error) {
 	toEncode := make(map[string]interface{})
-	toEncode["command"] = message[0]
-	switch message[0] {
-	case SLIDE_SHOW_FINISHED:
-	case SLIDE_SHOW_STARTED:
-		totalSlides, _ := strconv.Atoi(message[1])
-		currentSlide, _ := strconv.Atoi(message[2])
-		toEncode["totalSlides"] = totalSlides
-		toEncode["currentSlide"] = currentSlide
-	case SLIDE_UPDATED:
-		currentSlide, _ := strconv.Atoi(message[1])
-		toEncode["currentSlide"] = currentSlide
-	case SLIDE_SHOW_INFO:
-		toEncode["slideShowName"] = message[1]
-	default:
-		return nil, errors.New("Failed to encode command")
+
+	if len(message) > 0 {
+		toEncode["command"] = message[0]
+		switch message[0] {
+		case SLIDE_SHOW_FINISHED:
+		case SLIDE_SHOW_STARTED:
+			totalSlides, _ := strconv.Atoi(message[1])
+			currentSlide, _ := strconv.Atoi(message[2])
+			toEncode["totalSlides"] = totalSlides
+			toEncode["currentSlide"] = currentSlide
+			toEncode["preview"] = message[3]
+		case SLIDE_UPDATED:
+			currentSlide, _ := strconv.Atoi(message[1])
+			toEncode["currentSlide"] = currentSlide
+			toEncode["preview"] = message[2]
+		default:
+			return nil, errors.New("Failed to encode command")
+		}
 	}
+
 	encoded, _ := json.Marshal(toEncode)
 	return encoded, nil
 }

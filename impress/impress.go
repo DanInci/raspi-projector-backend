@@ -55,6 +55,7 @@ type ImpressClient struct {
 	configs      configuration
 	presentation *presentation
 	stats        ImpressStats
+	previews     map[string]string
 	controllers  []*ImpressController
 	isTerminated bool
 	shutdown     chan bool
@@ -98,6 +99,7 @@ func NewClient() *ImpressClient {
 		configs:      *currentConfig,
 		presentation: nil,
 		stats:        ImpressStats{Name: "", Status: make([]string, 0), Controllers: 0, MaxControllers: currentConfig.maxControllers, IsOwnerPresent: false, OwnerTimeout: currentConfig.ownerTimeout},
+		previews:     make(map[string]string),
 		controllers:  make([]*ImpressController, 0),
 		isTerminated: false,
 		shutdown:     make(chan bool),
@@ -300,7 +302,12 @@ func (impr *ImpressClient) handleRegistrations() {
 			} else {
 				Logger.Info("The maximum number of controllers was reached")
 			}
-			controller.send <- impr.stats.Status
+
+			currentStatus := impr.stats.Status
+			if len(currentStatus) > 0 && currentStatus[0] != SLIDE_SHOW_FINISHED {
+				currentStatus = append(currentStatus, impr.previews[currentStatus[2]])
+			}
+			controller.send <- currentStatus
 
 			impr.mu.Unlock()
 		case controller := <-impr.unregister:
@@ -358,7 +365,7 @@ func (impr *ImpressClient) listenForMessages() {
 
 func checkValidMessage(message []string) bool {
 	switch message[0] {
-	case PAIRED, VALIDATING, SLIDE_SHOW_INFO, SLIDE_SHOW_FINISHED, SLIDE_SHOW_STARTED, SLIDE_UPDATED:
+	case PAIRED, VALIDATING, SLIDE_SHOW_INFO, SLIDE_SHOW_FINISHED, SLIDE_SHOW_STARTED, SLIDE_UPDATED, SLIDE_PREVIEW:
 		return true
 	default:
 		return false
@@ -369,16 +376,30 @@ func (impr *ImpressClient) serveRequests() {
 	for {
 		select {
 		case message := <-impr.messages:
-			for _, controller := range impr.controllers {
-				select {
-				case controller.send <- message:
-				}
-			}
 			switch message[0] {
+			case PAIRED, VALIDATING:
+			case SLIDE_PREVIEW:
+				impr.previews[message[1]] = strings.Join(message[2:], "")
 			case SLIDE_SHOW_INFO:
 				impr.stats.Name = message[1]
-			case SLIDE_SHOW_FINISHED, SLIDE_SHOW_STARTED, SLIDE_UPDATED:
+			case SLIDE_SHOW_FINISHED:
 				impr.updateStatus(message)
+				for _, controller := range impr.controllers {
+					controller.send <- message
+				}
+			case SLIDE_SHOW_STARTED:
+				impr.updateStatus(message)
+				message = append(message, impr.previews[message[2]])
+				for _, controller := range impr.controllers {
+					controller.send <- message
+				}
+			case SLIDE_UPDATED:
+				impr.updateStatus(message)
+				message = append(message, impr.previews[message[1]])
+				for _, controller := range impr.controllers {
+					controller.send <- message
+				}
+
 			}
 		case request := <-impr.requests:
 			err := sendRequest(request, impr.conn)

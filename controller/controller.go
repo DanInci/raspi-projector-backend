@@ -2,6 +2,7 @@ package controller
 
 import (
 	json "encoding/json"
+	errors "errors"
 	impress "github.com/DanInci/raspberry-projector/impress"
 	log "github.com/apsdehal/go-logger"
 	websocket "github.com/gorilla/websocket"
@@ -9,6 +10,7 @@ import (
 	http "net/http"
 	os "os"
 	filepath "path/filepath"
+	strconv "strconv"
 	strings "strings"
 	sync "sync"
 )
@@ -20,7 +22,7 @@ var mu sync.Mutex = sync.Mutex{}
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
+	WriteBufferSize: 1024 * 1024,
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
@@ -28,16 +30,57 @@ const OWNER_UUID_HEADER = "X-OWNER-UUID"
 
 func GetStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if isSlideShowRunning() {
-		w.WriteHeader(http.StatusOK)
 
-		stats := getImpressClient().GetStats()
-		encoded, _ := json.Marshal(stats)
-		w.Write(encoded)
-
-	} else {
-		w.WriteHeader(http.StatusNotFound)
+	if !isSlideShowRunning() {
+		writeError(w, "Slideshow is not running", http.StatusNotFound)
+		return
 	}
+
+	stats := getImpressClient().GetStats()
+	response, err := encodeResponse(&stats)
+	if err != nil {
+		Logger.ErrorF("Error encoding stats: %v", err)
+		writeError(w, "Failed to get encode stats", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(response)
+}
+
+func encodeResponse(impressStats *impress.ImpressStats) ([]byte, error) {
+	statusEncoding := make(map[string]interface{})
+
+	if len(impressStats.Status) > 0 {
+		statusEncoding["command"] = impressStats.Status[0]
+		switch impressStats.Status[0] {
+		case impress.SLIDE_SHOW_FINISHED:
+		case impress.SLIDE_SHOW_STARTED:
+			totalSlides, _ := strconv.Atoi(impressStats.Status[1])
+			currentSlide, _ := strconv.Atoi(impressStats.Status[2])
+			statusEncoding["totalSlides"] = totalSlides
+			statusEncoding["currentSlide"] = currentSlide
+		case impress.SLIDE_UPDATED:
+			currentSlide, _ := strconv.Atoi(impressStats.Status[1])
+			statusEncoding["currentSlide"] = currentSlide
+		default:
+			return nil, errors.New("Failed to encode command")
+		}
+	}
+
+	response := make(map[string]interface{})
+	response["name"] = impressStats.Name
+	response["status"] = statusEncoding
+	response["controllers"] = impressStats.Controllers
+	response["maxControllers"] = impressStats.MaxControllers
+	response["isOwnerPresent"] = impressStats.IsOwnerPresent
+	response["ownerTimeout"] = impressStats.OwnerTimeout
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
 }
 
 func UploadPPT(w http.ResponseWriter, r *http.Request, filesDirectory string, maxUploadSize int64) {

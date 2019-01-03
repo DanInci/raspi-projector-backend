@@ -20,7 +20,7 @@ var (
 	libreRemoteName     = conf.String("libre-remote-name", "WebServer", "The name for the remote")
 	libreRemotePIN      = conf.String("libre-remote-pin", "13579", "The PIN for the remote connection")
 	libreMaxControllers = conf.Int("libre-max-controllers", 10, "The maximum number of slideshow controllers allowed")
-	libreMaxTimeout     = conf.Int("libre-max-timeout", 30, "The number of seconds the slideshow owner is allowed to be disconnected before drop")
+	libreMaxTimeout     = conf.Int("libre-max-timeout", 6000, "The number of seconds the slideshow owner is allowed to be disconnected before drop")
 	maxUploadSize       = conf.Int("max-upload-size", 1024*1024*10, "The maximum upload size for files")
 	filesDirectory      = conf.String("files-directory", "uploads", "The directory where the uploaded files would be saved")
 	httpAddr            = conf.String("http-addr", ":8080", "Address for http server")
