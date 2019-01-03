@@ -10,6 +10,7 @@ import (
 	exec "os/exec"
 	filepath "path/filepath"
 	runtime "runtime"
+	strconv "strconv"
 	strings "strings"
 	sync "sync"
 	syscall "syscall"
@@ -24,13 +25,12 @@ const (
 	PAIRED     = "LO_SERVER_SERVER_PAIRED"
 	VALIDATING = "LO_SERVER_VALIDATING_PIN"
 
-	SLIDE_SHOW_INFO       = "slideshow_info"
-	SLIDE_SHOW_STARTED    = "slideshow_started"
-	SLIDE_SHOW_FINISHED   = "slideshow_finished"
-	SLIDE_SHOW_TERMINATED = "slideshow_terminated"
-	SLIDE_UPDATED         = "slide_updated"
-	SLIDE_PREVIEW         = "slide_preview"
-	SLIDE_NOTES           = "slide_notes"
+	SLIDE_SHOW_INFO     = "slideshow_info"
+	SLIDE_SHOW_STARTED  = "slideshow_started"
+	SLIDE_SHOW_FINISHED = "slideshow_finished"
+	SLIDE_UPDATED       = "slide_updated"
+	SLIDE_PREVIEW       = "slide_preview"
+	SLIDE_NOTES         = "slide_notes"
 )
 
 var DefaultConfig = configuration{
@@ -45,7 +45,9 @@ type ImpressStats struct {
 	Name           string
 	Status         []string
 	Controllers    int
+	MaxControllers int
 	IsOwnerPresent bool
+	OwnerTimeout   int
 }
 
 type ImpressClient struct {
@@ -95,7 +97,7 @@ func NewClient() *ImpressClient {
 		conn:         nil,
 		configs:      *currentConfig,
 		presentation: nil,
-		stats:        ImpressStats{Name: "", Controllers: 0, IsOwnerPresent: false, Status: make([]string, 0)},
+		stats:        ImpressStats{Name: "", Status: make([]string, 0), Controllers: 0, MaxControllers: currentConfig.maxControllers, IsOwnerPresent: false, OwnerTimeout: currentConfig.ownerTimeout},
 		controllers:  make([]*ImpressController, 0),
 		isTerminated: false,
 		shutdown:     make(chan bool),
@@ -147,14 +149,15 @@ func (impr *ImpressClient) OpenConnection() error {
 		return err
 	}
 
-	time.Sleep(5 * time.Second)
+	if runtime.GOOS == "darwin" {
+		time.Sleep(5 * time.Second)
+	}
 	err1 := sendRequest([]string{PAIR_WITH_SERVER, impr.configs.remoteName, impr.configs.remotePIN}, rawConn)
 	if err1 != nil {
 		rawConn.Close()
 		return err1
 	}
 
-	// time.Sleep(10 * time.Second)
 	messages, err2 := readMessage(rawConn)
 	if err2 != nil {
 		rawConn.Close()
@@ -184,7 +187,8 @@ func (impr *ImpressClient) CloseConnection() {
 func (impr *ImpressClient) StopPresentation() {
 	if impr.presentation != nil {
 		if runtime.GOOS == "windows" {
-			if err := exec.Command("taskkill", "/F", "/T", "/PID", string(impr.presentation.command.Process.Pid)).Run(); err != nil {
+			pid := strconv.Itoa(impr.presentation.command.Process.Pid)
+			if err := exec.Command("taskkill", "/F", "/T", "/PID", pid).Run(); err != nil {
 				Logger.ErrorF("Error stopping presenation: %v", err)
 			}
 		} else {
@@ -262,19 +266,21 @@ func (impr *ImpressClient) Terminate() {
 	impr.mu.Lock()
 	defer impr.mu.Unlock()
 
-	Logger.Info("Received terminate signal. Impress client is shutting down")
-	if impr.ticker != nil {
-		impr.ticker.Stop()
-	}
-	for _, controller := range impr.controllers {
-		controller.send <- []string{SLIDE_SHOW_TERMINATED}
-		close(controller.send)
-	}
-	close(impr.shutdown)
-	impr.CloseConnection()
-	impr.StopPresentation()
+	if !impr.isTerminated {
+		impr.isTerminated = true
 
-	impr.isTerminated = true
+		Logger.Notice("Impress client received terminate signal. Shutting down")
+		if impr.ticker != nil {
+			impr.ticker.Stop()
+		}
+		for _, controller := range impr.controllers {
+			controller.send <- []string{SLIDE_SHOW_FINISHED}
+			close(controller.send)
+		}
+		close(impr.shutdown)
+		impr.CloseConnection()
+		impr.StopPresentation()
+	}
 }
 
 func (impr *ImpressClient) handleRegistrations() {
@@ -286,6 +292,7 @@ func (impr *ImpressClient) handleRegistrations() {
 			if impr.stats.Controllers < impr.configs.maxControllers {
 				impr.controllers = append(impr.controllers, controller)
 				if controller.IsOwner() {
+					Logger.Info("Owner joined the presentation")
 					impr.ticker.Stop()
 					impr.stats.IsOwnerPresent = true
 				}
@@ -303,7 +310,7 @@ func (impr *ImpressClient) handleRegistrations() {
 
 					impr.controllers = append(impr.controllers[:i], impr.controllers[i+1:]...)
 					if contr.IsOwner() {
-						Logger.InfoF("Slideshow owner has left. Waiting %d seconds for him to come back...", impr.configs.ownerTimeout)
+						Logger.InfoF("Presentation owner has left. Waiting %d seconds for him to come back...", impr.configs.ownerTimeout)
 						impr.ticker = impr.waitForOwner(time.Duration(impr.configs.ownerTimeout) * time.Second)
 						impr.stats.IsOwnerPresent = false
 					}
@@ -322,14 +329,14 @@ func (impr *ImpressClient) handleRegistrations() {
 
 func (impr *ImpressClient) waitForOwner(duration time.Duration) *time.Ticker {
 	ticker := time.NewTicker(duration)
-	go func() {
+	go func(shutdown chan bool) {
 		select {
-		case _, ok := <-ticker.C:
-			if ok {
-				impr.Terminate()
-			}
+		case <-ticker.C:
+			impr.Terminate()
+		case <-shutdown:
+			return
 		}
-	}()
+	}(impr.shutdown)
 	return ticker
 }
 
@@ -337,8 +344,10 @@ func (impr *ImpressClient) listenForMessages() {
 	for {
 		message, err := readMessage(impr.conn)
 		if err != nil {
-			Logger.ErrorF("Error reading Impress message: %v", err)
-			Logger.Critical("Impress client stopped listening for messages")
+			if !impr.isTerminated {
+				Logger.ErrorF("Error reading Impress message: %v", err)
+				Logger.Critical("Impress client stopped listening for messages")
+			}
 			break
 		}
 		if ok := checkValidMessage(message); ok {
@@ -372,11 +381,11 @@ func (impr *ImpressClient) serveRequests() {
 				impr.updateStatus(message)
 			}
 		case request := <-impr.requests:
-			if request[0] == PRESENTATION_TERMINATE {
+			err := sendRequest(request, impr.conn)
+			if request[0] == PRESENTATION_STOP {
 				impr.Terminate()
 				break
 			}
-			err := sendRequest(request, impr.conn)
 			if err != nil {
 				Logger.ErrorF("Error writing Impress request: %v", err)
 				Logger.Critical("Impress client stopped serving controller requests")

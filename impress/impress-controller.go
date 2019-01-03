@@ -2,9 +2,9 @@ package impress
 
 import (
 	json "encoding/json"
-	"errors"
+	errors "errors"
 	websocket "github.com/gorilla/websocket"
-	"strconv"
+	strconv "strconv"
 	time "time"
 )
 
@@ -14,7 +14,6 @@ const (
 	TRANSITION_NEXT           = "transition_next"
 	TRANSITION_PREVIOUS       = "transition_previous"
 	GO_TO_SLIDE               = "goto_slide"
-	PRESENTATION_TERMINATE    = "presentation_terminate"
 	PRESENTATION_BLANK_SCREEN = "presentation_blank_screen"
 	PRESENTATION_RESUME       = "presentation_resume"
 	PRESENTATION_START        = "presentation_start"
@@ -73,8 +72,8 @@ func (controller *ImpressController) readPump(client *ImpressClient) {
 			continue
 		}
 
-		if request[0] == PRESENTATION_TERMINATE && !controller.IsOwner() {
-			controller.writeError("Only the owner can terminate session")
+		if request[0] == PRESENTATION_STOP && !controller.IsOwner() {
+			controller.writeError("Only the owner can terminate the session")
 			continue
 		}
 
@@ -92,7 +91,7 @@ func decodeRequest(body []byte) ([]string, error) {
 		return nil, errors.New("command key not found")
 	}
 	switch value {
-	case TRANSITION_NEXT, TRANSITION_PREVIOUS, PRESENTATION_BLANK_SCREEN, PRESENTATION_RESUME, PRESENTATION_START, PRESENTATION_STOP, PRESENTATION_TERMINATE:
+	case TRANSITION_NEXT, TRANSITION_PREVIOUS, PRESENTATION_BLANK_SCREEN, PRESENTATION_RESUME, PRESENTATION_START, PRESENTATION_STOP:
 	case GO_TO_SLIDE:
 		value, ok := decoded["index"]
 		if !ok {
@@ -172,7 +171,6 @@ func encodeResponse(message []string) ([]byte, error) {
 	toEncode := make(map[string]interface{})
 	toEncode["command"] = message[0]
 	switch message[0] {
-	case SLIDE_SHOW_TERMINATED:
 	case SLIDE_SHOW_FINISHED:
 	case SLIDE_SHOW_STARTED:
 		totalSlides, _ := strconv.Atoi(message[1])

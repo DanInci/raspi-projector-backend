@@ -144,6 +144,13 @@ func ServeImpressController(w http.ResponseWriter, r *http.Request) {
 	controller.StartPumping(client)
 }
 
+func Terminate(server *http.Server) {
+	if client := getImpressClient(); client != nil {
+		client.Terminate()
+	}
+	server.Shutdown(nil)
+}
+
 func writeError(w http.ResponseWriter, message string, status int) {
 	toEncode := make(map[string]interface{})
 	toEncode["error"] = message

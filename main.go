@@ -7,9 +7,9 @@ import (
 	configure "github.com/paked/configure"
 	http "net/http"
 	// qrcode "github.com/skip2/go-qrcode"
-	"os"
-	"os/signal"
-	"syscall"
+	os "os"
+	signal "os/signal"
+	syscall "syscall"
 )
 
 var (
@@ -88,5 +88,5 @@ func main() {
 
 	<-c
 	logger.Notice("Received shutdown signal")
-	httpServer.Shutdown(nil)
+	controller.Terminate(httpServer)
 }
