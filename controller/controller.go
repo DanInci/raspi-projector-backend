@@ -29,6 +29,7 @@ var upgrader = websocket.Upgrader{
 const OWNER_UUID_HEADER = "X-OWNER-UUID"
 
 func GetStats(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
 	w.Header().Set("Content-Type", "application/json")
 
 	if !isSlideShowRunning() {
@@ -84,6 +85,7 @@ func encodeResponse(impressStats *impress.ImpressStats) ([]byte, error) {
 }
 
 func UploadPPT(w http.ResponseWriter, r *http.Request, filesDirectory string, maxUploadSize int64) {
+	enableCors(&w)
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		writeError(w, "File is too big", http.StatusBadRequest)
@@ -192,6 +194,12 @@ func Terminate(server *http.Server) {
 		client.Terminate()
 	}
 	server.Shutdown(nil)
+}
+
+func enableCors(w *http.ResponseWriter) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "*")
+	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 }
 
 func writeError(w http.ResponseWriter, message string, status int) {
