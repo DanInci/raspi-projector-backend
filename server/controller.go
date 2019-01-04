@@ -1,8 +1,7 @@
-package controller
+package server
 
 import (
 	json "encoding/json"
-	errors "errors"
 	impress "github.com/DanInci/raspberry-projector/impress"
 	log "github.com/apsdehal/go-logger"
 	websocket "github.com/gorilla/websocket"
@@ -10,12 +9,17 @@ import (
 	http "net/http"
 	os "os"
 	filepath "path/filepath"
-	strconv "strconv"
 	strings "strings"
 	sync "sync"
 )
 
+const DEFAULT_MAX_UPLOAD_SIZE = 1024
+const DEFAULT_UPLOAD_DIRECTORY = "upload"
+const OWNER_UUID_HEADER = "X-OWNER-UUID"
+
 var Logger *log.Logger
+var MaxUploadSize int = DEFAULT_MAX_UPLOAD_SIZE
+var UploadDirectory string = DEFAULT_UPLOAD_DIRECTORY
 
 var impressClient *impress.ImpressClient
 var mu sync.Mutex = sync.Mutex{}
@@ -26,10 +30,7 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-const OWNER_UUID_HEADER = "X-OWNER-UUID"
-
 func GetStats(w http.ResponseWriter, r *http.Request) {
-	enableCors(&w)
 	w.Header().Set("Content-Type", "application/json")
 
 	if !isSlideShowRunning() {
@@ -38,7 +39,7 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := getImpressClient().GetStats()
-	response, err := encodeResponse(&stats)
+	response, err := encodeImpressStats(&stats)
 	if err != nil {
 		Logger.ErrorF("Error encoding stats: %v", err)
 		writeError(w, "Failed to get encode stats", http.StatusInternalServerError)
@@ -49,45 +50,9 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 	w.Write(response)
 }
 
-func encodeResponse(impressStats *impress.ImpressStats) ([]byte, error) {
-	statusEncoding := make(map[string]interface{})
-
-	if len(impressStats.Status) > 0 {
-		statusEncoding["command"] = impressStats.Status[0]
-		switch impressStats.Status[0] {
-		case impress.SLIDE_SHOW_FINISHED:
-		case impress.SLIDE_SHOW_STARTED:
-			totalSlides, _ := strconv.Atoi(impressStats.Status[1])
-			currentSlide, _ := strconv.Atoi(impressStats.Status[2])
-			statusEncoding["totalSlides"] = totalSlides
-			statusEncoding["currentSlide"] = currentSlide
-		case impress.SLIDE_UPDATED:
-			currentSlide, _ := strconv.Atoi(impressStats.Status[1])
-			statusEncoding["currentSlide"] = currentSlide
-		default:
-			return nil, errors.New("Failed to encode command")
-		}
-	}
-
-	response := make(map[string]interface{})
-	response["name"] = impressStats.Name
-	response["status"] = statusEncoding
-	response["controllers"] = impressStats.Controllers
-	response["maxControllers"] = impressStats.MaxControllers
-	response["isOwnerPresent"] = impressStats.IsOwnerPresent
-	response["ownerTimeout"] = impressStats.OwnerTimeout
-
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		return nil, err
-	}
-	return encoded, nil
-}
-
-func UploadPPT(w http.ResponseWriter, r *http.Request, filesDirectory string, maxUploadSize int64) {
-	enableCors(&w)
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
-	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
+func UploadPPT(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, int64(MaxUploadSize))
+	if err := r.ParseMultipartForm(int64(MaxUploadSize)); err != nil {
 		writeError(w, "File is too big", http.StatusBadRequest)
 		return
 	}
@@ -119,7 +84,7 @@ func UploadPPT(w http.ResponseWriter, r *http.Request, filesDirectory string, ma
 		return
 	}
 
-	uploadFolderPath := filepath.Join(filepath.Dir(os.Args[0]), filesDirectory)
+	uploadFolderPath := filepath.Join(filepath.Dir(os.Args[0]), UploadDirectory)
 	os.MkdirAll(uploadFolderPath, os.ModePerm)
 	filePath := filepath.Join(uploadFolderPath, fileName)
 
@@ -194,21 +159,6 @@ func Terminate(server *http.Server) {
 		client.Terminate()
 	}
 	server.Shutdown(nil)
-}
-
-func enableCors(w *http.ResponseWriter) {
-	(*w).Header().Set("Access-Control-Allow-Origin", "*")
-	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-	(*w).Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
-}
-
-func writeError(w http.ResponseWriter, message string, status int) {
-	toEncode := make(map[string]interface{})
-	toEncode["error"] = message
-	encoded, _ := json.Marshal(toEncode)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	w.Write(encoded)
 }
 
 func getImpressClient() *impress.ImpressClient {

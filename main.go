@@ -2,17 +2,17 @@ package main
 
 import (
 	fmt "fmt"
-	controller "github.com/DanInci/raspberry-projector/controller"
 	impress "github.com/DanInci/raspberry-projector/impress"
+	server "github.com/DanInci/raspberry-projector/server"
 	log "github.com/apsdehal/go-logger"
+	mux "github.com/gorilla/mux"
 	configure "github.com/paked/configure"
 	qrcode "github.com/skip2/go-qrcode"
 	http "net/http"
 	os "os"
 	signal "os/signal"
 	filepath "path/filepath"
-	strings "strings"
-	syscall "syscall"
+	time "time"
 )
 
 var (
@@ -25,16 +25,17 @@ var (
 	libreMaxControllers = conf.Int("libre-max-controllers", 10, "The maximum number of slideshow controllers allowed")
 	libreMaxTimeout     = conf.Int("libre-max-timeout", 6000, "The number of seconds the slideshow owner is allowed to be disconnected before drop")
 	maxUploadSize       = conf.Int("max-upload-size", 1024*1024*10, "The maximum upload size for files")
-	filesDirectory      = conf.String("files-directory", "uploads", "The directory where the uploaded files would be saved")
+	uploadsDirectory    = conf.String("uploads-directory", "uploads", "The directory where the uploaded files would be saved")
 	qrDirectory         = conf.String("qr-directory", "www-qr", "The directory from where the qr files are served")
+	clientDirectory     = conf.String("client-directory", "www-client", "The directory from where the qr files are served")
 	networkSSID         = conf.String("network-ssid", "Dani's Raspberry", "The network SSID used to generate the connection QR Code")
 	networkPass         = conf.String("network-pass", "123456987asd", "The network password used to generate the connection QR Code")
-	httpAddr            = conf.String("http-addr", ":8080", "Address for http server")
+	httpAddr            = conf.String("http-addr", "0.0.0.0:8080", "Address for http server")
 )
 
 func init() {
 	impress.Logger = logger
-	controller.Logger = logger
+	server.Logger = logger
 }
 
 func setupConfigs() {
@@ -51,9 +52,42 @@ func setupLogger() *log.Logger {
 	return log
 }
 
-func setupQRCode() error {
+func setupImpress() {
+	impress.Configure(*libreOfficePath, *libreRemoteURL, *libreRemoteName, *libreRemotePIN, *libreMaxControllers, *libreMaxTimeout)
+}
+
+func setupHTTPServer() *http.Server {
+	r := mux.NewRouter()
+
+	r.Use(server.CorsMiddleware)
+	r.Use(server.LoggingMiddleware)
+
+	r.HandleFunc("/stats", server.GetStats).Methods("GET")
+
+	r.HandleFunc("/upload", server.UploadPPT).Methods("POST")
+
+	r.HandleFunc("/control", server.ServeImpressController).Methods("POST")
+
+	r.PathPrefix("/client/").HandlerFunc(server.NewStaticFile(fmt.Sprintf("./%s/index.html", *clientDirectory)))
+
+	r.PathPrefix("/qr/").HandlerFunc(server.NewStaticFile(fmt.Sprintf("./%s/index.html", *qrDirectory)))
+
+	httpServer := &http.Server{
+		Addr:         *httpAddr,
+		WriteTimeout: time.Second * 15,
+		ReadTimeout:  time.Second * 15,
+		IdleTimeout:  time.Second * 60,
+		Handler:      r,
+	}
+	server.MaxUploadSize = *maxUploadSize
+	server.UploadDirectory = *uploadsDirectory
+
+	return httpServer
+}
+
+func generateQRCode() error {
 	content := fmt.Sprintf("WIFI:S:%s;T:WPA;P:%s;;", *networkSSID, *networkPass)
-	qrcode, err := qrcode.Encode(content, qrcode.Highest, 1024)
+	qrcode, err := qrcode.Encode(content, qrcode.Highest, 512)
 	if err != nil {
 		return err
 	}
@@ -75,47 +109,21 @@ func setupQRCode() error {
 	return nil
 }
 
-func setupHTTPServer() *http.Server {
-	httpServer := &http.Server{Addr: *httpAddr}
-
-	fileServer := http.FileServer(controller.NewFilesystem(*qrDirectory))
-	http.Handle("/qr/", http.StripPrefix(strings.TrimRight("/qr/", "/"), fileServer))
-
-	http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
-		controller.GetStats(w, r)
-	})
-
-	http.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
-		controller.UploadPPT(w, r, *filesDirectory, int64(*maxUploadSize))
-	})
-
-	http.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
-		controller.ServeImpressController(w, r)
-	})
-
-	return httpServer
-}
-
-func setupImpress() {
-	impress.Configure(*libreOfficePath, *libreRemoteURL, *libreRemoteName, *libreRemotePIN, *libreMaxControllers, *libreMaxTimeout)
-}
-
 func main() {
 	logger.InfoF("Process started with PID %d", os.Getpid())
 
 	setupConfigs()
 	conf.Parse()
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 
-	if err := setupQRCode(); err != nil {
+	if err := generateQRCode(); err != nil {
 		logger.CriticalF("Failed to generate connection QR Code: %v", err)
 		logger.Fatal("Shutting down...")
 	}
 
 	setupImpress()
+
 	httpServer := setupHTTPServer()
-	logger.InfoF("Starting http server on localhost%s...", httpServer.Addr)
+	logger.InfoF("Starting http server on %s...", httpServer.Addr)
 	go func() {
 		err := httpServer.ListenAndServe()
 		if err != nil {
@@ -124,7 +132,11 @@ func main() {
 		}
 	}()
 
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+
 	<-c
 	logger.Notice("Received shutdown signal")
-	controller.Terminate(httpServer)
+	server.Terminate(httpServer)
+	os.Exit(0)
 }
