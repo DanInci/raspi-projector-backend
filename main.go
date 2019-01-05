@@ -64,13 +64,13 @@ func setupHTTPServer() *http.Server {
 
 	r.HandleFunc("/stats", server.GetStats).Methods("GET")
 
-	r.HandleFunc("/upload", server.UploadPPT).Methods("POST")
+	r.HandleFunc("/upload", server.UploadPPT).Methods("POST", "OPTIONS")
 
-	r.HandleFunc("/control", server.ServeImpressController).Methods("POST")
+	r.HandleFunc("/control", server.ServeImpressController).Methods("POST", "OPTIONS")
 
-	r.PathPrefix("/client/").HandlerFunc(server.NewStaticFile(fmt.Sprintf("./%s/index.html", *clientDirectory)))
+	r.PathPrefix("/client").Handler(http.StripPrefix("/client", server.NewStaticServer(fmt.Sprintf("./%s", *clientDirectory))))
 
-	r.PathPrefix("/qr/").HandlerFunc(server.NewStaticFile(fmt.Sprintf("./%s/index.html", *qrDirectory)))
+	r.PathPrefix("/qr").Handler(http.StripPrefix("/qr", server.NewStaticServer(fmt.Sprintf("./%s", *qrDirectory))))
 
 	httpServer := &http.Server{
 		Addr:         *httpAddr,
@@ -92,7 +92,7 @@ func generateQRCode() error {
 		return err
 	}
 
-	uploadFolderPath := filepath.Join(filepath.Dir(os.Args[0]), *qrDirectory, "images")
+	uploadFolderPath := filepath.Join(filepath.Dir(os.Args[0]), *qrDirectory, "assets")
 	os.MkdirAll(uploadFolderPath, os.ModePerm)
 	filePath := filepath.Join(uploadFolderPath, "qr.png")
 
