@@ -39,6 +39,7 @@ func init() {
 }
 
 func setupConfigs() {
+	conf.Use(configure.NewHCLFromFile("application.conf"))
 	conf.Use(configure.NewEnvironment())
 	conf.Use(configure.NewFlag())
 }
