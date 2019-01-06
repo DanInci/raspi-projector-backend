@@ -384,7 +384,7 @@ func (impr *ImpressClient) serveRequests() {
 				if len(currentStatus) > 0 && currentStatus[0] != SLIDE_SHOW_FINISHED && message[1] == currentStatus[2] {
 					currentStatus = append(currentStatus, impr.previews[currentStatus[2]])
 					for _, controller := range impr.controllers {
-						controller.send <- message
+						controller.send <- currentStatus
 					}
 				}
 			case SLIDE_SHOW_INFO:
