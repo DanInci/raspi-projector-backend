@@ -73,8 +73,8 @@ func (controller *ImpressController) readPump(client *ImpressClient) {
 			continue
 		}
 
-		if request[0] == PRESENTATION_STOP && !controller.IsOwner() {
-			controller.writeError("Only the owner can terminate the session")
+		if !controller.IsOwner() {
+			controller.writeError("Only the owner can control the presentation")
 			continue
 		}
 
@@ -180,11 +180,21 @@ func encodeResponse(message []string) ([]byte, error) {
 			currentSlide, _ := strconv.Atoi(message[2])
 			toEncode["totalSlides"] = totalSlides
 			toEncode["currentSlide"] = currentSlide
-			toEncode["preview"] = strings.Join([]string{"data:image/png;base64,", message[3]}, "")
+			if message[3] == "" {
+				toEncode["preview"] = ""
+
+			} else {
+				toEncode["preview"] = strings.Join([]string{"data:image/png;base64,", message[3]}, "")
+			}
 		case SLIDE_UPDATED:
 			currentSlide, _ := strconv.Atoi(message[1])
 			toEncode["currentSlide"] = currentSlide
-			toEncode["preview"] = strings.Join([]string{"data:image/png;base64,", message[2]}, "")
+			if message[2] == "" {
+				toEncode["preview"] = ""
+
+			} else {
+				toEncode["preview"] = strings.Join([]string{"data:image/png;base64,", message[2]}, "")
+			}
 		default:
 			return nil, errors.New("Failed to encode command")
 		}

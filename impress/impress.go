@@ -380,6 +380,13 @@ func (impr *ImpressClient) serveRequests() {
 			case PAIRED, VALIDATING:
 			case SLIDE_PREVIEW:
 				impr.previews[message[1]] = strings.Join(message[2:], "")
+				currentStatus := impr.stats.Status
+				if len(currentStatus) > 0 && currentStatus[0] != SLIDE_SHOW_FINISHED && message[1] == currentStatus[2] {
+					currentStatus = append(currentStatus, impr.previews[currentStatus[2]])
+					for _, controller := range impr.controllers {
+						controller.send <- message
+					}
+				}
 			case SLIDE_SHOW_INFO:
 				impr.stats.Name = message[1]
 			case SLIDE_SHOW_FINISHED:
