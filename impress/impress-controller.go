@@ -5,6 +5,7 @@ import (
 	errors "errors"
 	websocket "github.com/gorilla/websocket"
 	strconv "strconv"
+	strings "strings"
 	time "time"
 )
 
@@ -179,11 +180,11 @@ func encodeResponse(message []string) ([]byte, error) {
 			currentSlide, _ := strconv.Atoi(message[2])
 			toEncode["totalSlides"] = totalSlides
 			toEncode["currentSlide"] = currentSlide
-			toEncode["preview"] = message[3]
+			toEncode["preview"] = strings.Join([]string{"data:image/png;base64,", message[3]}, "")
 		case SLIDE_UPDATED:
 			currentSlide, _ := strconv.Atoi(message[1])
 			toEncode["currentSlide"] = currentSlide
-			toEncode["preview"] = message[2]
+			toEncode["preview"] = strings.Join([]string{"data:image/png;base64,", message[2]}, "")
 		default:
 			return nil, errors.New("Failed to encode command")
 		}

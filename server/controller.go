@@ -141,6 +141,7 @@ func ServeImpressController(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authHeader := r.Header.Get("Authorization")
+	Logger.InfoF("AuthHeader: %s", authHeader)
 	isOwner := authHeader != "" && isSlideShowOwnerUUID(authHeader)
 
 	conn, err := upgrader.Upgrade(w, r, nil)
