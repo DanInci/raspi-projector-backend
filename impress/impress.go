@@ -435,8 +435,10 @@ func (impr *ImpressClient) updateStatus(messages []string) {
 	case SLIDE_SHOW_STARTED:
 		impr.stats.Status = []string{SLIDE_SHOW_STARTED, messages[1], messages[2]}
 	case SLIDE_UPDATED:
-		if impr.stats.Status != nil && impr.stats.Status[0] == SLIDE_SHOW_STARTED {
+		if len(impr.stats.Status) > 0 && impr.stats.Status[0] == SLIDE_SHOW_STARTED {
 			impr.stats.Status[2] = messages[1]
+		} else {
+			impr.stats.Status = []string{SLIDE_UPDATED, messages[1]}
 		}
 	}
 }
