@@ -15,6 +15,7 @@ import (
 
 const DEFAULT_MAX_UPLOAD_SIZE = 1024
 const DEFAULT_UPLOAD_DIRECTORY = "upload"
+const OWNER_UUID = "ownerUUID"
 
 var Logger *log.Logger
 var MaxUploadSize int = DEFAULT_MAX_UPLOAD_SIZE
@@ -140,9 +141,11 @@ func ServeImpressController(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authHeader := r.Header.Get("Authorization")
-	Logger.InfoF("AuthHeader: %s", authHeader)
-	isOwner := authHeader != "" && isSlideShowOwnerUUID(authHeader)
+	ownerUUID, err := r.Cookie(OWNER_UUID)
+	isOwner := false
+	if err != nil {
+		isOwner = isSlideShowOwnerUUID(ownerUUID.Value)
+	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
