@@ -1,17 +1,24 @@
 package server
 
 import (
+	base64 "encoding/base64"
 	json "encoding/json"
 	errors "errors"
 	impress "github.com/DanInci/raspberry-projector/impress"
 	betterguid "github.com/kjk/betterguid"
 	http "net/http"
 	strconv "strconv"
+	strings "strings"
 )
 
-func isSlideShowOwnerUUID(uuid string) bool {
+func isSlideShowOwnerUUID(authHeader string) bool {
 	if isSlideShowRunning() {
-		return getImpressClient().GetPresentationUUID() == uuid
+		auth := strings.SplitN(authHeader, " ", 2)
+		if len(auth) == 2 && auth[0] == "Basic" {
+			payload, _ := base64.StdEncoding.DecodeString(auth[1])
+			token := strings.SplitN(string(payload), ":", 2)[0]
+			return getImpressClient().GetPresentationUUID() == token
+		}
 	}
 	return false
 }

@@ -15,7 +15,6 @@ import (
 
 const DEFAULT_MAX_UPLOAD_SIZE = 1024
 const DEFAULT_UPLOAD_DIRECTORY = "upload"
-const OWNER_UUID_HEADER = "X-OWNER-UUID"
 
 var Logger *log.Logger
 var MaxUploadSize int = DEFAULT_MAX_UPLOAD_SIZE
@@ -53,6 +52,7 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 func UploadPPT(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(MaxUploadSize))
 	if err := r.ParseMultipartForm(int64(MaxUploadSize)); err != nil {
+		Logger.InfoF("err: %v", err)
 		writeError(w, "File is too big", http.StatusBadRequest)
 		return
 	}
@@ -140,8 +140,8 @@ func ServeImpressController(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ownerHeader := r.Header.Get(OWNER_UUID_HEADER)
-	isOwner := ownerHeader != "" && isSlideShowOwnerUUID(ownerHeader)
+	authHeader := r.Header.Get("Authorization")
+	isOwner := authHeader != "" && isSlideShowOwnerUUID(authHeader)
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {

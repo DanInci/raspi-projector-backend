@@ -23,7 +23,7 @@ var (
 	libreRemoteName     = conf.String("libre-remote-name", "WebServer", "The name for the remote")
 	libreRemotePIN      = conf.String("libre-remote-pin", "13579", "The PIN for the remote connection")
 	libreMaxControllers = conf.Int("libre-max-controllers", 10, "The maximum number of slideshow controllers allowed")
-	libreMaxTimeout     = conf.Int("libre-max-timeout", 6000, "The number of seconds the slideshow owner is allowed to be disconnected before drop")
+	libreMaxTimeout     = conf.Int("libre-max-timeout", 60, "The number of seconds the slideshow owner is allowed to be disconnected before drop")
 	maxUploadSize       = conf.Int("max-upload-size", 1024*1024*10, "The maximum upload size for files")
 	uploadsDirectory    = conf.String("uploads-directory", "uploads", "The directory where the uploaded files would be saved")
 	qrDirectory         = conf.String("qr-directory", "www-qr", "The directory from where the qr files are served")
@@ -65,9 +65,9 @@ func setupHTTPServer() *http.Server {
 
 	r.HandleFunc("/stats", server.GetStats).Methods("GET")
 
-	r.HandleFunc("/upload", server.UploadPPT).Methods("POST", "OPTIONS")
+	r.HandleFunc("/upload", server.UploadPPT).Methods("POST")
 
-	r.HandleFunc("/control", server.ServeImpressController).Methods("POST", "OPTIONS")
+	r.HandleFunc("/control", server.ServeImpressController).Methods("GET")
 
 	r.PathPrefix("/client").Handler(http.StripPrefix("/client", server.NewStaticServer(fmt.Sprintf("./%s", *clientDirectory))))
 
