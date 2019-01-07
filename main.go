@@ -60,8 +60,8 @@ func setupImpress() {
 func setupHTTPServer() *http.Server {
 	r := mux.NewRouter()
 
-	r.Use(server.CorsMiddleware)
-	r.Use(server.LoggingMiddleware)
+	// r.Use(server.CorsMiddleware)
+	// r.Use(server.LoggingMiddleware)
 
 	r.HandleFunc("/stats", server.GetStats).Methods("GET")
 

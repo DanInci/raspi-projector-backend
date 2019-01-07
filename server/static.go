@@ -49,6 +49,11 @@ func (fh *FileHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte("404 Something went wrong - " + http.StatusText(http.StatusNotFound)))
 	} else {
+		if strings.HasSuffix(upath, ".js") {
+			w.Header().Set("Content-Type", "text/javascript")
+		} else if strings.HasSuffix(upath, ".css") {
+			w.Header().Set("Content-Type", "text/css")
+		}
 		buffer := make([]byte, 1024)
 		for {
 			n, err := file.Read(buffer)
