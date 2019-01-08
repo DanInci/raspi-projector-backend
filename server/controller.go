@@ -53,29 +53,33 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 func UploadPPT(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(MaxUploadSize))
 	if err := r.ParseMultipartForm(int64(MaxUploadSize)); err != nil {
-		Logger.InfoF("err: %v", err)
+		Logger.InfoF("Error parsing MultipartForm: %v", err)
 		writeError(w, "File is too big", http.StatusBadRequest)
 		return
 	}
 
 	fileName := r.PostFormValue("fileName")
 	if fileName == "" {
+		Logger.InfoF("Error fileName not found")
 		writeError(w, "'fileName' field not found", http.StatusBadRequest)
 		return
 	}
 	file, _, err := r.FormFile("uploadFile")
 	if err != nil {
+		Logger.InfoF("Error uploadFile not found")
 		writeError(w, "'uploadFile' field not found", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 	fileBytes, err := ioutil.ReadAll(file)
 	if err != nil {
+		Logger.InfoF("Error reading uploaded file: %v", err)
 		writeError(w, "Invalid file", http.StatusBadRequest)
 		return
 	}
 	fileType := http.DetectContentType(fileBytes)
 	if fileType != "application/octet-stream" || !(strings.HasSuffix(fileName, ".ppt") || strings.HasSuffix(fileName, ".pptx")) {
+		Logger.InfoF("Invalid uploaded file type")
 		writeError(w, "Invalid file type", http.StatusBadRequest)
 		return
 	}

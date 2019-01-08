@@ -151,9 +151,7 @@ func (impr *ImpressClient) OpenConnection() error {
 		return err
 	}
 
-	if runtime.GOOS == "darwin" {
-		time.Sleep(5 * time.Second)
-	}
+	time.Sleep(5 * time.Second)
 	err1 := sendRequest([]string{PAIR_WITH_SERVER, impr.configs.remoteName, impr.configs.remotePIN}, rawConn)
 	if err1 != nil {
 		rawConn.Close()
@@ -166,8 +164,12 @@ func (impr *ImpressClient) OpenConnection() error {
 		return err2
 	}
 	if messages[0] == VALIDATING {
-		rawConn.Close()
-		return errors.New("Remote server not authorised")
+		Logger.NoticeF("Waiting for remote %s to be authorised...", impr.configs.remoteName)
+		if _, err := readMessage(rawConn); err != nil {
+			rawConn.Close()
+			return errors.New("Failed to authorise remote")
+		}
+		Logger.Notice("Remote successfully authorised")
 	} else if messages[0] != PAIRED {
 		rawConn.Close()
 		return errors.New("Failed connection handshake")
