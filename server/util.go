@@ -3,10 +3,11 @@ package server
 import (
 	json "encoding/json"
 	errors "errors"
-	impress "github.com/DanInci/raspberry-projector/impress"
-	betterguid "github.com/kjk/betterguid"
 	http "net/http"
 	strconv "strconv"
+
+	impress "github.com/DanInci/raspi-projector-backend/impress"
+	betterguid "github.com/kjk/betterguid"
 )
 
 func isSlideShowOwnerUUID(uuid string) bool {

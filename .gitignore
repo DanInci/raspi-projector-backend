@@ -48,5 +48,7 @@
 
 ### CUSTOM ###
 uploads
+www-client
+www-qr/assets
 
 # End of https://www.gitignore.io/api/go,git,visualstudiocode

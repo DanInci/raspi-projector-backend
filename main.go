@@ -2,17 +2,18 @@ package main
 
 import (
 	fmt "fmt"
-	impress "github.com/DanInci/raspberry-projector/impress"
-	server "github.com/DanInci/raspberry-projector/server"
-	log "github.com/apsdehal/go-logger"
-	mux "github.com/gorilla/mux"
-	configure "github.com/paked/configure"
-	qrcode "github.com/skip2/go-qrcode"
 	http "net/http"
 	os "os"
 	signal "os/signal"
 	filepath "path/filepath"
 	time "time"
+
+	impress "github.com/DanInci/raspi-projector-backend/impress"
+	server "github.com/DanInci/raspi-projector-backend/server"
+	log "github.com/apsdehal/go-logger"
+	mux "github.com/gorilla/mux"
+	configure "github.com/paked/configure"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 var (
@@ -60,7 +61,7 @@ func setupImpress() {
 func setupHTTPServer() *http.Server {
 	r := mux.NewRouter()
 
-	// r.Use(server.CorsMiddleware)
+	r.Use(server.CorsMiddleware)
 	// r.Use(server.LoggingMiddleware)
 
 	r.HandleFunc("/stats", server.GetStats).Methods("GET")

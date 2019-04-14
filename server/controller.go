@@ -2,15 +2,16 @@ package server
 
 import (
 	json "encoding/json"
-	impress "github.com/DanInci/raspberry-projector/impress"
-	log "github.com/apsdehal/go-logger"
-	websocket "github.com/gorilla/websocket"
 	ioutil "io/ioutil"
 	http "net/http"
 	os "os"
 	filepath "path/filepath"
 	strings "strings"
 	sync "sync"
+
+	impress "github.com/DanInci/raspi-projector-backend/impress"
+	log "github.com/apsdehal/go-logger"
+	websocket "github.com/gorilla/websocket"
 )
 
 const DEFAULT_MAX_UPLOAD_SIZE = 1024

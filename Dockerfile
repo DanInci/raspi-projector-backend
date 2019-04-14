@@ -1,7 +1,7 @@
 FROM golang:alpine as builder
 
-COPY . /go/src/github.com/DanInci/raspberry-projector/
-WORKDIR /go/src/github.com/DanInci/raspberry-projector/
+COPY . /go/src/github.com/DanInci/raspi-projector-backend/
+WORKDIR /go/src/github.com/DanInci/raspi-projector-backend/
 
 RUN apk add --no-cache git
 
