@@ -15,5 +15,4 @@ command docker build -t ${IMAGE_NAME} .
 command docker create --name ${CONTAINER_NAME} ${IMAGE_NAME}
 command docker cp ${CONTAINER_NAME}:/go/src/github.com/DanInci/raspi-projector-backend/main ./${BINARY_NAME}
 
-clean()
 exit
