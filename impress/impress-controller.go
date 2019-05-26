@@ -3,10 +3,11 @@ package impress
 import (
 	json "encoding/json"
 	errors "errors"
-	websocket "github.com/gorilla/websocket"
 	strconv "strconv"
 	strings "strings"
 	time "time"
+
+	websocket "github.com/gorilla/websocket"
 )
 
 const (
@@ -198,6 +199,8 @@ func encodeResponse(message []string) ([]byte, error) {
 		default:
 			return nil, errors.New("Failed to encode command")
 		}
+	} else {
+		return nil, errors.New("Empty message command")
 	}
 
 	encoded, _ := json.Marshal(toEncode)

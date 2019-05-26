@@ -3,7 +3,6 @@ package impress
 import (
 	bufio "bufio"
 	errors "errors"
-	log "github.com/apsdehal/go-logger"
 	net "net"
 	url "net/url"
 	os "os"
@@ -15,6 +14,8 @@ import (
 	sync "sync"
 	syscall "syscall"
 	time "time"
+
+	log "github.com/apsdehal/go-logger"
 )
 
 var Logger *log.Logger
@@ -411,14 +412,26 @@ func (impr *ImpressClient) serveRequests() {
 
 			}
 		case request := <-impr.requests:
-			err := sendRequest(request, impr.conn)
-			if request[0] == PRESENTATION_STOP {
-				impr.Terminate()
-				break
+			if request[0] == TRANSITION_NEXT || request[0] == TRANSITION_PREVIOUS {
+				status := impr.GetStats().Status
+				if len(status) > 0 && status[0] == SLIDE_SHOW_STARTED {
+					currentSlide, _ := strconv.Atoi(status[2])
+					maxSlide, _ := strconv.Atoi(status[1])
+					if request[0] == TRANSITION_PREVIOUS && currentSlide == 0 {
+						break
+					} else if request[0] == TRANSITION_NEXT && currentSlide == maxSlide-1 {
+						break
+					}
+				}
 			}
+			err := sendRequest(request, impr.conn)
 			if err != nil {
 				Logger.ErrorF("Error writing Impress request: %v", err)
 				Logger.Critical("Impress client stopped serving controller requests")
+				break
+			}
+			if request[0] == PRESENTATION_STOP {
+				impr.Terminate()
 				break
 			}
 		case <-impr.shutdown:
@@ -443,6 +456,7 @@ func (impr *ImpressClient) updateStatus(messages []string) {
 			impr.stats.Status = []string{SLIDE_UPDATED, messages[1]}
 		}
 	}
+	// Logger.InfoF("Presentation status updated: %s", messages)
 }
 
 func readMessage(conn net.Conn) ([]string, error) {

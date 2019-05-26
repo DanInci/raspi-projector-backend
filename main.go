@@ -28,7 +28,6 @@ var (
 	maxUploadSize       = conf.Int("max-upload-size", 1024*1024*10, "The maximum upload size for files")
 	uploadsDirectory    = conf.String("uploads-directory", "uploads", "The directory where the uploaded files would be saved")
 	qrDirectory         = conf.String("qr-directory", "www-qr", "The directory from where the qr files are served")
-	clientDirectory     = conf.String("client-directory", "www-client", "The directory from where the qr files are served")
 	networkSSID         = conf.String("network-ssid", "Dani's Raspberry", "The network SSID used to generate the connection QR Code")
 	networkPass         = conf.String("network-pass", "123456987asd", "The network password used to generate the connection QR Code")
 	httpAddr            = conf.String("http-addr", "0.0.0.0:8080", "Address for http server")
@@ -40,7 +39,9 @@ func init() {
 }
 
 func setupConfigs() {
-	conf.Use(configure.NewHCLFromFile("application.conf"))
+	configFile := filepath.Join(filepath.Dir(os.Args[0]), "application.conf")
+	logger.InfoF("Using config file %s", configFile)
+	conf.Use(configure.NewHCLFromFile(configFile))
 	conf.Use(configure.NewEnvironment())
 	conf.Use(configure.NewFlag())
 }
@@ -70,9 +71,7 @@ func setupHTTPServer() *http.Server {
 
 	r.HandleFunc("/control", server.ServeImpressController).Methods("GET")
 
-	r.PathPrefix("/client").Handler(http.StripPrefix("/client", server.NewStaticServer(fmt.Sprintf("./%s", *clientDirectory))))
-
-	r.PathPrefix("/qr").Handler(http.StripPrefix("/qr", server.NewStaticServer(fmt.Sprintf("./%s", *qrDirectory))))
+	r.PathPrefix("/qr").Handler(http.StripPrefix("/qr", server.NewStaticServer(filepath.Join(filepath.Dir(os.Args[0]), *qrDirectory))))
 
 	httpServer := &http.Server{
 		Addr:         *httpAddr,

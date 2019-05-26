@@ -149,6 +149,7 @@ func ServeImpressController(w http.ResponseWriter, r *http.Request) {
 	ownerUUID, err := r.Cookie(OWNER_UUID)
 	isOwner := false
 	if err == nil {
+		Logger.InfoF("Received owner uuid cookie with value %s", ownerUUID)
 		isOwner = isSlideShowOwnerUUID(ownerUUID.Value)
 	}
 
